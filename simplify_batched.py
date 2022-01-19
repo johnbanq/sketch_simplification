@@ -61,6 +61,8 @@ class ReplicationPadToMultipleOf8:
     def __call__(self, data: Tensor) -> Tensor:
         if self.pw != 0 or self.ph != 0:
             return torch.nn.ReplicationPad2d((0, self.pw, 0, self.ph))(data)
+        else:
+            return data
 
     def __repr__(self):
         return self.__class__.__name__ + f"(pw={self.pw},ph={self.ph})"
@@ -100,7 +102,7 @@ def find_pictures(folder: Path) -> Iterable[Path]:
     """
     find pictures in folder
     """
-    return folder.glob("*.png")
+    return folder.glob("*.jpg")
 
 
 def count_pictures(folder: Path) -> int:
@@ -110,10 +112,14 @@ def count_pictures(folder: Path) -> int:
     return sum(1 for _ in find_pictures(folder))
 
 
+use_cuda = True
+
+
 def main(args):
     model = SimplificationModel.load_from_file(args.model)
-    model = model.cuda()
-    model.eval()
+    if use_cuda:
+        model = model.cuda()
+    model = model.eval()
 
     # probe image size
     sample_pic = next(iter(find_pictures(args.folder)))
@@ -130,14 +136,17 @@ def main(args):
     pics_count = count_pictures(args.folder)
     batch_size = args.batch_size
     for path_chunk in tqdm(chunked(pics, batch_size), total=math.ceil(pics_count/batch_size), desc="processing..."):
-        data = preprocess([PIL.Image.open(i) for i in path_chunk])
+        with torch.no_grad():
+            data = preprocess([PIL.Image.open(i) for i in path_chunk])
+            if use_cuda:
+                data = data.cuda()
+            pred = model.forward(data)
+            if use_cuda:
+                pred = pred.float()
 
-        data = data.cuda()
-        pred = model.forward(data)
-        pred = pred.float()
-
-        for p, i in zip(pred, path_chunk):
-            save_image(p, i)
+        print("dry run, output ignored")
+        # for p, i in zip(pred, path_chunk):
+        #     save_image(p, i)
 
 
 if __name__ == '__main__':
