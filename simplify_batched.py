@@ -112,7 +112,7 @@ def count_pictures(folder: Path) -> int:
     return sum(1 for _ in find_pictures(folder))
 
 
-use_cuda = True
+use_cuda = False
 
 
 def main(args):
@@ -144,16 +144,16 @@ def main(args):
             if use_cuda:
                 pred = pred.float()
 
-        print("dry run, output ignored")
-        # for p, i in zip(pred, path_chunk):
-        #     save_image(p, i)
+        for p, i in zip(pred, path_chunk):
+            i_out = i.parent / (i.name[:-len(".jpg")]+".processed.jpeg")
+            save_image(p, i_out)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Batched Sketch Simplification Processor')
     parser.add_argument('--folder', type=Path, help="folder to fetch jpg pictures from and to place into")
     parser.add_argument('--model', type=str, default='model_gan.all.pth', help='Model to use')
-    parser.add_argument('--batch_size', type=int, default=1000, help="amount of pics per batch")
+    parser.add_argument('--batch-size', type=int, default=1, help="amount of pics per batch")
     opt = parser.parse_args()
 
     main(opt)
