@@ -1,12 +1,13 @@
 import argparse
 import copy
 from pathlib import Path
+from typing import List
 
+import PIL
 import torch
 import torch.nn as nn
-from PIL import Image
 from torch import Tensor
-from torchvision import transforms
+from torchvision.transforms import Normalize, ToTensor
 from torchvision.utils import save_image
 
 
@@ -47,25 +48,73 @@ class SimplificationModel(nn.Module):
         return self.model.forward(data)
 
 
+class ReplicationPadToMultipleOf8:
+
+    def __init__(self, w: int, h: int):
+        self.pw = 8 - (w % 8) if w % 8 != 0 else 0
+        self.ph = 8 - (h % 8) if h % 8 != 0 else 0
+
+    def __call__(self, data: Tensor) -> Tensor:
+        if self.pw != 0 or self.ph != 0:
+            return torch.nn.ReplicationPad2d((0, self.pw, 0, self.ph))(data)
+
+    def __repr__(self):
+        return self.__class__.__name__ + f"(pw={self.pw},ph={self.ph})"
+
+
+class SimplificationPreprocessor:
+
+    def __init__(self, w: int, h: int, image_mean: float, image_std: float):
+        self.w, self.h = w, h
+        self.to_tensor = ToTensor()
+        self.normalize = Normalize(mean=image_mean, std=image_std)
+        self.pad = ReplicationPadToMultipleOf8(w, h)
+
+    def __call__(self, data: List[PIL.Image.Image]) -> Tensor:
+        """
+        preprocess a list of PIL images to format required by model
+        """
+        data = self._to_tensor(data)
+        b, c, h, w = data.shape
+        assert w == self.w and h == self.h
+        data = self.normalize(data)
+        data = self.pad(data)
+        return data
+
+    def _to_tensor(self, images: List[PIL.Image.Image]) -> Tensor:
+        """
+        mono-chrome-ify and stack the ToTensor result of PIL images
+        """
+        ret = []
+        for img in images:
+            tensor = self.to_tensor(img.convert('L'))
+            ret.append(tensor)
+        return torch.stack(ret)
+
+
 use_cuda = torch.cuda.device_count() > 0
 
 
 def main(opt):
     model = SimplificationModel.load_from_file(opt.model)
+    if use_cuda:
+        model = model.cuda()
     model.eval()
 
-    data = Image.open(opt.img).convert('L')
-    w, h = data.size[0], data.size[1]
-    pw = 8 - (w % 8) if w % 8 != 0 else 0
-    ph = 8 - (h % 8) if h % 8 != 0 else 0
-    data = ((transforms.ToTensor()(data) - model.image_mean) / model.image_std).unsqueeze(0)
-    if pw != 0 or ph != 0:
-        data = torch.nn.ReplicationPad2d((0, pw, 0, ph))(data).data
+    data = PIL.Image.open(opt.img)
+    width, height = data.size
+    preprocess = SimplificationPreprocessor(
+        w=width, h=height,
+        image_mean=model.image_mean, image_std=model.image_std
+    )
+    data = preprocess([data])
 
     if use_cuda:
-        pred = model.cuda().forward(data.cuda()).float()
-    else:
-        pred = model.forward(data)
+        data = data.cuda()
+    pred = model.forward(data)
+    if use_cuda:
+        pred = pred.float()
+
     save_image(pred[0], opt.out)
 
 
